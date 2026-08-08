@@ -2,12 +2,9 @@ import streamlit as st
 import sqlite3
 import os
 import base64
-import io
 from PIL import Image
 from groq import Groq
 from duckduckgo_search import DDGS
-from gtts import gTTS
-from streamlit_mic_recorder import mic_recorder
 
 # --- MARCO AI SVG LOGO ---
 MARCO_LOGO_SVG = """<svg width="45" height="45" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -31,39 +28,31 @@ svg_bytes = MARCO_LOGO_SVG.encode('utf-8')
 svg_base64 = base64.b64encode(svg_bytes).decode('utf-8')
 favicon_data_url = f"data:image/svg+xml;base64,{svg_base64}"
 
+# --- APP CONFIGURATION ---
 st.set_page_config(page_title="MARCO AI", page_icon=favicon_data_url, layout="wide")
 
-# --- CUSTOM CSS: DISABLE PULL TO REFRESH & ALIGN MIC WITH CHAT INPUT AT BOTTOM ---
+# --- CUSTOM CSS: DISABLE PULL-TO-REFRESH & HIDE UNWANTED UI ---
 st.markdown(
     """
     <style>
+        /* Disable Android Pull-To-Refresh on Scroll */
         html, body, .stApp {
             overscroll-behavior-y: contain !important;
             overflow-y: auto !important;
         }
+        
+        /* Hide Default Streamlit Branding & Top Bars */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
         .stAppHeader {display: none !important;}
+        button[title="View source"] {display: none !important;}
         [data-testid="stHeader"] {display: none !important;}
         [data-testid="stToolbar"] {display: none !important;}
         
         .block-container {
             padding-top: 1.5rem !important;
-            padding-bottom: 6rem !important;
-        }
-
-        /* POSITION MIC ICON EXACTLY NEXT TO CHAT INPUT AT THE BOTTOM */
-        div[data-testid="stCustomComponentV1"] {
-            position: fixed !important;
-            bottom: 22px !important;
-            right: 40px !important;
-            z-index: 999999 !important;
-        }
-        
-        /* Make space inside Chat Input so text/send button don't overlap mic */
-        div[data-testid="stChatInput"] {
-            padding-right: 60px !important;
+            padding-bottom: 2rem !important;
         }
     </style>
     """,
@@ -114,21 +103,24 @@ You are MARCO AI, a smart, direct, and authentic AI collaborator.
 
 STRICT LANGUAGE & TONE RULES:
 1. MATCH THE USER'S LANGUAGE EXACTLY: 
-   - If user speaks Hinglish (Roman Hindi), respond ONLY in pure casual Hinglish.
-   - If user speaks Hindi, respond ONLY in Hindi.
+   - If user speaks Hinglish (Roman Hindi like "kya kar rahe ho"), respond ONLY in pure casual Hinglish ("kuch nahi boss, aap batao kya chal raha hai").
+   - If user speaks Devanagari Hindi ("क्या कर रहे हो"), respond ONLY in Hindi.
    - If user speaks English, respond ONLY in English.
-2. MATCH THE USER'S VIBE: Be casual, witty, and peer-like when the user is casual.
-3. ZERO DISCLAIMERS: Bold (**bold**) key terms and concepts when giving technical answers.
+2. NEVER DUPLICATE TRANSLATIONS: Never provide dual answers like "नमस्ते! Hello!". Pick the exact language format used by the user and stick to it.
+3. MATCH THE USER'S VIBE & STYLE: Be casual, witty, and peer-like when the user is casual. Be sharp and structured when the user asks technical or complex questions.
+4. ZERO DISCLAIMERS & ZERO META-FILLER: Never talk about your AI limitations, cutoff dates, or robotic preambles. Bold (**bold**) key terms, numbers, and important concepts when delivering technical answers.
 """
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 client = Groq(api_key=GROQ_API_KEY)
 
+# --- WEB SEARCH FUNCTION ---
 def perform_web_search(query):
     query_lower = query.strip().lower()
-    greetings = ["hi", "hello", "hey", "kaise ho", "kya haal hai", "kya kar rahe ho"]
+    greetings = ["hi", "hello", "hey", "kaise ho", "kya haal hai", "kya kar rahe ho", "who are you"]
     if any(query_lower == g or query_lower.startswith(g + " ") for g in greetings):
         return ""
+        
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=3))
@@ -139,7 +131,7 @@ def perform_web_search(query):
         return ""
     return ""
 
-# --- SIDEBAR ---
+# --- SIDEBAR UI ---
 sidebar_header = f'''
 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
     {MARCO_LOGO_SVG}
@@ -158,14 +150,12 @@ else:
 if st.sidebar.button("➕ New Chat"):
     st.session_state["session_id"] = os.urandom(8).hex()
     st.session_state["messages"] = []
-    st.session_state["last_processed_audio"] = None
     st.rerun()
 
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = "default_session"
 
 enable_search = st.sidebar.checkbox("🌐 Enable Real-Time Web Search", value=True)
-enable_tts = st.sidebar.checkbox("🔊 Voice Reply (Speech Output)", value=True)
 ai_mode = st.sidebar.selectbox("🎯 AI Mode", ["Default (Adaptive)", "Concise", "Detailed"])
 
 st.sidebar.divider()
@@ -178,14 +168,13 @@ sessions = [row[0] for row in c.fetchall()]
 conn.close()
 
 for s_id in sessions:
-    col1_hist, col2_hist = st.sidebar.columns([4, 1])
-    with col1_hist:
+    col1, col2 = st.sidebar.columns([4, 1])
+    with col1:
         if st.button(f"👉 Chat {s_id[:6]}", key=f"load_{s_id}"):
             st.session_state["session_id"] = s_id
             st.session_state["messages"] = load_chat(s_id)
-            st.session_state["last_processed_audio"] = None
             st.rerun()
-    with col2_hist:
+    with col2:
         if st.button("🗑️", key=f"del_{s_id}"):
             delete_chat(s_id)
             if st.session_state["session_id"] == s_id:
@@ -213,87 +202,45 @@ for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- INPUT HANDLING ---
-input_text = ""
-
-# Floating Mic Component (Placed at bottom via CSS)
-audio_data = mic_recorder(
-    start_prompt="🎙️",
-    stop_prompt="⏹️",
-    key="gemini_mic_btn",
-    just_once=True
-)
-
-# Prevent Spam Loop: Process audio only once
-if "last_processed_audio" not in st.session_state:
-    st.session_state["last_processed_audio"] = None
-
-if audio_data and "bytes" in audio_data and audio_data["id"] != st.session_state["last_processed_audio"]:
-    st.session_state["last_processed_audio"] = audio_data["id"]
-    with st.spinner("Processing Voice..."):
-        try:
-            audio_bytes = audio_data["bytes"]
-            audio_file = ("audio.wav", audio_bytes, "audio/wav")
-            transcription = client.audio.transcriptions.create(
-                model="whisper-large-v3-turbo",
-                file=audio_file
-            )
-            input_text = transcription.text
-        except Exception as e:
-            st.error(f"Voice Error: {e}")
-
-# Native Chat Input (Includes Send Button)
 user_input = st.chat_input("Ask MARCO AI anything or attach a screenshot...", accept_file=True, file_type=["jpg", "jpeg", "png"])
 
-if user_input and not input_text:
+if user_input:
     input_text = user_input.text if hasattr(user_input, "text") and user_input.text else str(user_input)
+    
+    if input_text:
+        st.session_state["messages"].append({"role": "user", "content": input_text})
+        save_message(st.session_state["session_id"], "user", input_text)
 
-# --- PROCESS RESPONSE ---
-if input_text:
-    st.session_state["messages"].append({"role": "user", "content": input_text})
-    save_message(st.session_state["session_id"], "user", input_text)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                web_context = ""
+                if enable_search:
+                    web_context = perform_web_search(input_text)
 
-    with st.chat_message("assistant"):
-        with st.spinner("MARCO is thinking..."):
-            web_context = ""
-            if enable_search:
-                web_context = perform_web_search(input_text)
+                final_system_prompt = SYSTEM_PROMPT
+                if ai_mode == "Concise":
+                    final_system_prompt += "\nKEEP RESPONSE UNDER 3 SENTENCES."
+                elif ai_mode == "Detailed":
+                    final_system_prompt += "\nPROVIDE IN-DEPTH EXPLANATIONS WITH EXAMPLES."
 
-            final_system_prompt = SYSTEM_PROMPT
-            if ai_mode == "Concise":
-                final_system_prompt += "\nKEEP RESPONSE UNDER 3 SENTENCES."
-            elif ai_mode == "Detailed":
-                final_system_prompt += "\nPROVIDE IN-DEPTH EXPLANATIONS WITH EXAMPLES."
+                api_messages = [{"role": "system", "content": final_system_prompt}]
+                for m in st.session_state["messages"]:
+                    api_messages.append({"role": m["role"], "content": m["content"]})
 
-            api_messages = [{"role": "system", "content": final_system_prompt}]
-            for m in st.session_state["messages"]:
-                api_messages.append({"role": m["role"], "content": m["content"]})
+                if web_context:
+                    api_messages[-1]["content"] += web_context
 
-            if web_context:
-                api_messages[-1]["content"] += web_context
-
-            try:
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=api_messages,
-                    temperature=0.6
-                )
-                bot_reply = response.choices[0].message.content
-            except Exception as e:
-                bot_reply = f"Error generating response: {str(e)}"
-
-            st.markdown(bot_reply)
-            st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-            save_message(st.session_state["session_id"], "assistant", bot_reply)
-
-            if enable_tts:
                 try:
-                    tts = gTTS(text=bot_reply.replace("*", ""), lang='hi' if any(ord(c) > 127 for c in bot_reply) else 'en')
-                    fp = io.BytesIO()
-                    tts.write_to_fp(fp)
-                    fp.seek(0)
-                    st.audio(fp, format="audio/mp3", autoplay=True)
-                except Exception:
-                    pass
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=api_messages,
+                        temperature=0.6
+                    )
+                    bot_reply = response.choices[0].message.content
+                except Exception as e:
+                    bot_reply = f"Error generating response: {str(e)}"
 
-            st.rerun()
+                st.markdown(bot_reply)
+                st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
+                save_message(st.session_state["session_id"], "assistant", bot_reply)
+                st.rerun()
