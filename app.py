@@ -131,8 +131,12 @@ def generate_image_url(prompt):
     image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&model=flux&nologo=true&seed={os.urandom(4).hex()}"
     return image_url
 
-def analyze_image_for_style(image_bytes, user_style_prompt):
+def analyze_image_for_enhancement(image_bytes, user_instruction):
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    is_anime_req = "anime" in user_instruction.lower()
+    
+    style_target = "photorealistic 8k studio photography, crisp details, highly sharp" if not is_anime_req else "anime art style, 8k render"
+    
     try:
         response = client.chat.completions.create(
             model="llama-3.2-11b-vision-preview",
@@ -143,11 +147,10 @@ def analyze_image_for_style(image_bytes, user_style_prompt):
                         {
                             "type": "text", 
                             "text": (
-                                "Analyze this image accurately. Count the exact number of people, their genders, hairstyles, clothing colors, poses, and facial expressions. "
-                                "Create a highly specific image generation prompt that recreates these EXACT subjects, their count, and clothing in the following artistic style: "
-                                f"'{user_style_prompt}'. "
-                                "Make sure to preserve subject genders, number of people in frame, facial features, and clothing colors accurately. "
-                                "Output ONLY the prompt text without any preambles."
+                                "Describe this photo in extreme detail so it can be re-rendered in ultra high resolution. "
+                                "Specify exact number of people, their precise gender, facial appearance, hair, clothing colors, poses, and background. "
+                                f"Style instruction from user: '{user_instruction}'. "
+                                "Output ONLY a single descriptive image prompt. DO NOT use words like 'anime' or 'cartoon' unless specifically asked."
                             )
                         },
                         {
@@ -159,12 +162,12 @@ def analyze_image_for_style(image_bytes, user_style_prompt):
                     ]
                 }
             ],
-            temperature=0.3
+            temperature=0.2
         )
         vision_prompt = response.choices[0].message.content.strip()
-        return f"{vision_prompt}, 8k resolution, highly detailed, masterpieces, masterpiece anime render"
+        return f"{vision_prompt}, {style_target}, realistic lighting, ultra high quality, 4k"
     except Exception:
-        return f"A boy wearing green t-shirt and a girl wearing brown top together, anime 4k style, high quality portrait"
+        return f"Ultra HD 8k realistic photo enhancement, crisp detailed portrait, studio lighting"
 
 # --- SIDEBAR UI ---
 sidebar_header = f'''
@@ -182,7 +185,6 @@ else:
     st.sidebar.warning("Enter correct Passcode")
     st.stop()
 
-# SESSION MANAGEMENT
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = "default_session"
 
@@ -201,7 +203,7 @@ with col_btn2:
 is_image_channel = (st.session_state["session_id"] == "image_studio_channel")
 
 if is_image_channel:
-    st.sidebar.info("🖼️ **Mode:** Image Studio (Prompt ya Image attach karke convert karein)")
+    st.sidebar.info("🖼️ **Mode:** Image Studio (Enhance photo or generate image)")
 else:
     enable_search = st.sidebar.checkbox("🌐 Enable Real-Time Web Search", value=True)
     ai_mode = st.sidebar.selectbox("🎯 AI Mode", ["Default (Adaptive)", "Concise", "Detailed"])
@@ -238,7 +240,7 @@ if "messages" not in st.session_state:
 
 if not st.session_state["messages"]:
     large_logo = MARCO_LOGO_SVG.replace('width="45"', 'width="85"').replace('height="45"', 'height="85"')
-    title_text = "Welcome to Image Studio Boss, Describe or attach photo to convert!" if is_image_channel else "Welcome Boss, What shall MARCO solve today?"
+    title_text = "Welcome to Image Studio Boss, Attach image to enhance in 4K!" if is_image_channel else "Welcome Boss, What shall MARCO solve today?"
     entrance_html = f'''
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 50vh; text-align: center;">
         {large_logo}
@@ -253,7 +255,7 @@ for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-placeholder_text = "Attach photo + prompt or enter prompt to generate..." if is_image_channel else "Ask MARCO AI anything..."
+placeholder_text = "Attach photo + 'Make this 4K' or enter prompt..." if is_image_channel else "Ask MARCO AI anything..."
 user_input = st.chat_input(placeholder_text, accept_file=True, file_type=["jpg", "jpeg", "png"])
 
 if user_input:
@@ -261,43 +263,43 @@ if user_input:
     uploaded_files = user_input.files if hasattr(user_input, "files") and user_input.files else []
     
     if input_text or uploaded_files:
-        display_msg = input_text if input_text else "Uploaded Image for transformation"
+        display_msg = input_text if input_text else "Uploaded Image for 4K Enhancement"
         st.session_state["messages"].append({"role": "user", "content": display_msg})
         save_message(st.session_state["session_id"], "user", display_msg)
 
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
                 input_lower = input_text.lower()
-                image_keywords = ["generate image", "make image", "draw", "create image", "image of", "picture of", "photo of", "/image", "anime", "4k", "convert"]
+                image_keywords = ["generate image", "make image", "draw", "create image", "image of", "picture of", "photo of", "/image", "anime", "4k", "convert", "enhance"]
                 
-                # RULE 1: IF USER IS IN IMAGE STUDIO CHANNEL
+                # IMAGE STUDIO CHANNEL
                 if is_image_channel:
-                    user_style = input_text if input_text else "High quality 4k anime style transformation"
+                    user_instruction = input_text if input_text else "Make this photo ultra realistic 4k"
                     
                     if uploaded_files:
                         img_bytes = uploaded_files[0].getvalue()
-                        final_prompt = analyze_image_for_style(img_bytes, user_style)
+                        final_prompt = analyze_image_for_enhancement(img_bytes, user_instruction)
                     else:
                         img_prompt = input_text
                         for kw in ["generate image", "make image", "create image", "/image"]:
                             img_prompt = img_prompt.lower().replace(kw, "").strip()
-                        final_prompt = f"{img_prompt}, 4k ultra detailed anime" if img_prompt else "futuristic anime 4k boss portrait"
+                        final_prompt = f"{img_prompt}, ultra realistic 8k photo, crisp detail" if img_prompt else "ultra HD 4k realistic portrait"
                         
                     img_url = generate_image_url(final_prompt)
-                    bot_reply = f"Here is your converted 4K Anime Image Boss:\n\n![Generated Image]({img_url})"
+                    bot_reply = f"Here is your Enhanced 4K Quality Image Boss:\n\n![Enhanced Image]({img_url})"
                     
                     st.markdown(bot_reply)
                     st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
                     save_message(st.session_state["session_id"], "assistant", bot_reply)
 
-                # RULE 2: IF USER ASKS FOR IMAGE IN NORMAL CHAT
+                # RESTRICT IMAGE CMDS IN NORMAL CHAT
                 elif any(kw in input_lower for kw in image_keywords):
-                    bot_reply = "⚠️ **Image Generation is restricted to the Image Studio channel.**\n\nSidebar mein **🎨 Image Studio** button par click karke wahan photo attach karke prompt bhejo!"
+                    bot_reply = "⚠️ **Image Enhancement is restricted to the Image Studio channel.**\n\nSidebar mein **🎨 Image Studio** button par click karke wahan photo attach karke 4K prompt bhejo!"
                     st.markdown(bot_reply)
                     st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
                     save_message(st.session_state["session_id"], "assistant", bot_reply)
 
-                # RULE 3: NORMAL CHAT RESPONSE
+                # NORMAL CHAT
                 else:
                     web_context = ""
                     if enable_search:
