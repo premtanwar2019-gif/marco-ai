@@ -2,8 +2,6 @@ import streamlit as st
 import sqlite3
 import os
 import base64
-import requests
-import urllib.parse
 from PIL import Image
 from groq import Groq
 from duckduckgo_search import DDGS
@@ -33,7 +31,7 @@ favicon_data_url = f"data:image/svg+xml;base64,{svg_base64}"
 # --- APP CONFIGURATION ---
 st.set_page_config(page_title="MARCO AI", page_icon=favicon_data_url, layout="wide")
 
-# --- CUSTOM CSS ---
+# --- CUSTOM CSS: NO PULL-TO-REFRESH & CLEAN UI ---
 st.markdown(
     """
     <style>
@@ -126,49 +124,6 @@ def perform_web_search(query):
         return ""
     return ""
 
-def generate_image_url(prompt):
-    encoded_prompt = urllib.parse.quote(prompt)
-    image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&model=flux&nologo=true&seed={os.urandom(4).hex()}"
-    return image_url
-
-def analyze_image_for_enhancement(image_bytes, user_instruction):
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    is_anime_req = "anime" in user_instruction.lower()
-    
-    style_target = "photorealistic 8k studio photography, crisp details, highly sharp" if not is_anime_req else "anime art style, 8k render"
-    
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text", 
-                            "text": (
-                                "Describe this photo in extreme detail so it can be re-rendered in ultra high resolution. "
-                                "Specify exact number of people, their precise gender, facial appearance, hair, clothing colors, poses, and background. "
-                                f"Style instruction from user: '{user_instruction}'. "
-                                "Output ONLY a single descriptive image prompt. DO NOT use words like 'anime' or 'cartoon' unless specifically asked."
-                            )
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            temperature=0.2
-        )
-        vision_prompt = response.choices[0].message.content.strip()
-        return f"{vision_prompt}, {style_target}, realistic lighting, ultra high quality, 4k"
-    except Exception:
-        return f"Ultra HD 8k realistic photo enhancement, crisp detailed portrait, studio lighting"
-
 # --- SIDEBAR UI ---
 sidebar_header = f'''
 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
@@ -185,28 +140,16 @@ else:
     st.sidebar.warning("Enter correct Passcode")
     st.stop()
 
+if st.sidebar.button("➕ New Chat", use_container_width=True):
+    st.session_state["session_id"] = os.urandom(8).hex()
+    st.session_state["messages"] = []
+    st.rerun()
+
 if "session_id" not in st.session_state:
     st.session_state["session_id"] = "default_session"
 
-col_btn1, col_btn2 = st.sidebar.columns(2)
-with col_btn1:
-    if st.button("➕ New Chat", use_container_width=True):
-        st.session_state["session_id"] = os.urandom(8).hex()
-        st.session_state["messages"] = []
-        st.rerun()
-with col_btn2:
-    if st.button("🎨 Image Studio", use_container_width=True):
-        st.session_state["session_id"] = "image_studio_channel"
-        st.session_state["messages"] = load_chat("image_studio_channel")
-        st.rerun()
-
-is_image_channel = (st.session_state["session_id"] == "image_studio_channel")
-
-if is_image_channel:
-    st.sidebar.info("🖼️ **Mode:** Image Studio (Enhance photo or generate image)")
-else:
-    enable_search = st.sidebar.checkbox("🌐 Enable Real-Time Web Search", value=True)
-    ai_mode = st.sidebar.selectbox("🎯 AI Mode", ["Default (Adaptive)", "Concise", "Detailed"])
+enable_search = st.sidebar.checkbox("🌐 Enable Real-Time Web Search", value=True)
+ai_mode = st.sidebar.selectbox("🎯 AI Mode", ["Default (Adaptive)", "Concise", "Detailed"])
 
 st.sidebar.divider()
 st.sidebar.subheader("📜 Chat History (RECENTS)")
@@ -218,8 +161,6 @@ sessions = [row[0] for row in c.fetchall()]
 conn.close()
 
 for s_id in sessions:
-    if s_id == "image_studio_channel":
-        continue
     col1, col2 = st.sidebar.columns([4, 1])
     with col1:
         if st.button(f"👉 Chat {s_id[:6]}", key=f"load_{s_id}"):
@@ -240,12 +181,11 @@ if "messages" not in st.session_state:
 
 if not st.session_state["messages"]:
     large_logo = MARCO_LOGO_SVG.replace('width="45"', 'width="85"').replace('height="45"', 'height="85"')
-    title_text = "Welcome to Image Studio Boss, Attach image to enhance in 4K!" if is_image_channel else "Welcome Boss, What shall MARCO solve today?"
     entrance_html = f'''
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 50vh; text-align: center;">
         {large_logo}
-        <div style="font-size: 28px; font-weight: 700; color: #1a202c; margin-top: 20px;">
-            {title_text}
+        <div style="font-size: 30px; font-weight: 700; color: #1a202c; margin-top: 20px;">
+            Welcome Boss, What shall MARCO solve today?
         </div>
     </div>
     '''
@@ -255,81 +195,45 @@ for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-placeholder_text = "Attach photo + 'Make this 4K' or enter prompt..." if is_image_channel else "Ask MARCO AI anything..."
-user_input = st.chat_input(placeholder_text, accept_file=True, file_type=["jpg", "jpeg", "png"])
+user_input = st.chat_input("Ask MARCO AI anything...", accept_file=True, file_type=["jpg", "jpeg", "png"])
 
 if user_input:
-    input_text = user_input.text if hasattr(user_input, "text") and user_input.text else ""
-    uploaded_files = user_input.files if hasattr(user_input, "files") and user_input.files else []
+    input_text = user_input.text if hasattr(user_input, "text") and user_input.text else str(user_input)
     
-    if input_text or uploaded_files:
-        display_msg = input_text if input_text else "Uploaded Image for 4K Enhancement"
-        st.session_state["messages"].append({"role": "user", "content": display_msg})
-        save_message(st.session_state["session_id"], "user", display_msg)
+    if input_text:
+        st.session_state["messages"].append({"role": "user", "content": input_text})
+        save_message(st.session_state["session_id"], "user", input_text)
 
         with st.chat_message("assistant"):
-            with st.spinner("Processing..."):
-                input_lower = input_text.lower()
-                image_keywords = ["generate image", "make image", "draw", "create image", "image of", "picture of", "photo of", "/image", "anime", "4k", "convert", "enhance"]
-                
-                # IMAGE STUDIO CHANNEL
-                if is_image_channel:
-                    user_instruction = input_text if input_text else "Make this photo ultra realistic 4k"
-                    
-                    if uploaded_files:
-                        img_bytes = uploaded_files[0].getvalue()
-                        final_prompt = analyze_image_for_enhancement(img_bytes, user_instruction)
-                    else:
-                        img_prompt = input_text
-                        for kw in ["generate image", "make image", "create image", "/image"]:
-                            img_prompt = img_prompt.lower().replace(kw, "").strip()
-                        final_prompt = f"{img_prompt}, ultra realistic 8k photo, crisp detail" if img_prompt else "ultra HD 4k realistic portrait"
-                        
-                    img_url = generate_image_url(final_prompt)
-                    bot_reply = f"Here is your Enhanced 4K Quality Image Boss:\n\n![Enhanced Image]({img_url})"
-                    
-                    st.markdown(bot_reply)
-                    st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-                    save_message(st.session_state["session_id"], "assistant", bot_reply)
+            with st.spinner("Thinking..."):
+                web_context = ""
+                if enable_search:
+                    web_context = perform_web_search(input_text)
 
-                # RESTRICT IMAGE CMDS IN NORMAL CHAT
-                elif any(kw in input_lower for kw in image_keywords):
-                    bot_reply = "⚠️ **Image Enhancement is restricted to the Image Studio channel.**\n\nSidebar mein **🎨 Image Studio** button par click karke wahan photo attach karke 4K prompt bhejo!"
-                    st.markdown(bot_reply)
-                    st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-                    save_message(st.session_state["session_id"], "assistant", bot_reply)
+                final_system_prompt = SYSTEM_PROMPT
+                if ai_mode == "Concise":
+                    final_system_prompt += "\nKEEP RESPONSE UNDER 3 SENTENCES."
+                elif ai_mode == "Detailed":
+                    final_system_prompt += "\nPROVIDE IN-DEPTH EXPLANATIONS WITH EXAMPLES."
 
-                # NORMAL CHAT
-                else:
-                    web_context = ""
-                    if enable_search:
-                        web_context = perform_web_search(input_text)
+                api_messages = [{"role": "system", "content": final_system_prompt}]
+                for m in st.session_state["messages"]:
+                    api_messages.append({"role": m["role"], "content": m["content"]})
 
-                    final_system_prompt = SYSTEM_PROMPT
-                    if ai_mode == "Concise":
-                        final_system_prompt += "\nKEEP RESPONSE UNDER 3 SENTENCES."
-                    elif ai_mode == "Detailed":
-                        final_system_prompt += "\nPROVIDE IN-DEPTH EXPLANATIONS WITH EXAMPLES."
+                if web_context:
+                    api_messages[-1]["content"] += web_context
 
-                    api_messages = [{"role": "system", "content": final_system_prompt}]
-                    for m in st.session_state["messages"]:
-                        api_messages.append({"role": m["role"], "content": m["content"]})
+                try:
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=api_messages,
+                        temperature=0.6
+                    )
+                    bot_reply = response.choices[0].message.content
+                except Exception as e:
+                    bot_reply = f"Error generating response: {str(e)}"
 
-                    if web_context:
-                        api_messages[-1]["content"] += web_context
-
-                    try:
-                        response = client.chat.completions.create(
-                            model="llama-3.3-70b-versatile",
-                            messages=api_messages,
-                            temperature=0.6
-                        )
-                        bot_reply = response.choices[0].message.content
-                    except Exception as e:
-                        bot_reply = f"Error generating response: {str(e)}"
-
-                    st.markdown(bot_reply)
-                    st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
-                    save_message(st.session_state["session_id"], "assistant", bot_reply)
-                
+                st.markdown(bot_reply)
+                st.session_state["messages"].append({"role": "assistant", "content": bot_reply})
+                save_message(st.session_state["session_id"], "assistant", bot_reply)
                 st.rerun()
