@@ -33,7 +33,7 @@ favicon_data_url = f"data:image/svg+xml;base64,{svg_base64}"
 
 st.set_page_config(page_title="MARCO AI", page_icon=favicon_data_url, layout="wide")
 
-# --- CUSTOM CSS: NO PULL TO REFRESH & FLOATING INPUT DOCK ---
+# --- CUSTOM CSS: DISABLE PULL TO REFRESH & ALIGN MIC WITH CHAT INPUT AT BOTTOM ---
 st.markdown(
     """
     <style>
@@ -50,24 +50,20 @@ st.markdown(
         
         .block-container {
             padding-top: 1.5rem !important;
-            padding-bottom: 7rem !important;
+            padding-bottom: 6rem !important;
         }
 
-        /* GEMINI FLOATING BOTTOM DOCK */
-        .gemini-dock {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 90%;
-            max-width: 800px;
-            background-color: #f0f4f9;
-            border-radius: 30px;
-            padding: 8px 16px;
-            display: flex;
-            align-items: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            z-index: 99999;
+        /* POSITION MIC ICON EXACTLY NEXT TO CHAT INPUT AT THE BOTTOM */
+        div[data-testid="stCustomComponentV1"] {
+            position: fixed !important;
+            bottom: 22px !important;
+            right: 40px !important;
+            z-index: 999999 !important;
+        }
+        
+        /* Make space inside Chat Input so text/send button don't overlap mic */
+        div[data-testid="stChatInput"] {
+            padding-right: 60px !important;
         }
     </style>
     """,
@@ -162,6 +158,7 @@ else:
 if st.sidebar.button("➕ New Chat"):
     st.session_state["session_id"] = os.urandom(8).hex()
     st.session_state["messages"] = []
+    st.session_state["last_processed_audio"] = None
     st.rerun()
 
 if "session_id" not in st.session_state:
@@ -186,6 +183,7 @@ for s_id in sessions:
         if st.button(f"👉 Chat {s_id[:6]}", key=f"load_{s_id}"):
             st.session_state["session_id"] = s_id
             st.session_state["messages"] = load_chat(s_id)
+            st.session_state["last_processed_audio"] = None
             st.rerun()
     with col2_hist:
         if st.button("🗑️", key=f"del_{s_id}"):
@@ -202,7 +200,7 @@ if "messages" not in st.session_state:
 if not st.session_state["messages"]:
     large_logo = MARCO_LOGO_SVG.replace('width="45"', 'width="85"').replace('height="45"', 'height="85"')
     entrance_html = f'''
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 40vh; text-align: center;">
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 50vh; text-align: center;">
         {large_logo}
         <div style="font-size: 30px; font-weight: 700; color: #1a202c; margin-top: 20px;">
             Welcome Boss, What shall MARCO solve today?
@@ -215,26 +213,23 @@ for msg in st.session_state["messages"]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# --- GEMINI DOCK INPUT BAR (TEXT + MIC SIDE-BY-SIDE) ---
+# --- INPUT HANDLING ---
 input_text = ""
 
-# Layout Grid for Chat Bar: [Text Field (85%), Mic Button (15%)]
-input_container = st.container()
-with input_container:
-    col_input, col_mic_btn = st.columns([85, 15])
-    
-    with col_input:
-        user_input_val = st.text_input("Ask MARCO AI...", key="gemini_text_input", label_visibility="collapsed", placeholder="Ask MARCO AI anything...")
-    
-    with col_mic_btn:
-        audio_data = mic_recorder(
-            start_prompt="🎙️",
-            stop_prompt="⏹️",
-            key="gemini_bottom_mic",
-            just_once=True
-        )
+# Floating Mic Component (Placed at bottom via CSS)
+audio_data = mic_recorder(
+    start_prompt="🎙️",
+    stop_prompt="⏹️",
+    key="gemini_mic_btn",
+    just_once=True
+)
 
-if audio_data and "bytes" in audio_data:
+# Prevent Spam Loop: Process audio only once
+if "last_processed_audio" not in st.session_state:
+    st.session_state["last_processed_audio"] = None
+
+if audio_data and "bytes" in audio_data and audio_data["id"] != st.session_state["last_processed_audio"]:
+    st.session_state["last_processed_audio"] = audio_data["id"]
     with st.spinner("Processing Voice..."):
         try:
             audio_bytes = audio_data["bytes"]
@@ -247,8 +242,11 @@ if audio_data and "bytes" in audio_data:
         except Exception as e:
             st.error(f"Voice Error: {e}")
 
-if user_input_val and not input_text:
-    input_text = user_input_val
+# Native Chat Input (Includes Send Button)
+user_input = st.chat_input("Ask MARCO AI anything or attach a screenshot...", accept_file=True, file_type=["jpg", "jpeg", "png"])
+
+if user_input and not input_text:
+    input_text = user_input.text if hasattr(user_input, "text") and user_input.text else str(user_input)
 
 # --- PROCESS RESPONSE ---
 if input_text:
